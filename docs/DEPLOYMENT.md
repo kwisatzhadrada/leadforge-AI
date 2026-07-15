@@ -1,342 +1,254 @@
-# LeadForge AI — Deployment Guide
+# LeadForge AI — Deployment Guide (Railway + Vercel)
 
-## Prerequisites
+This guide reflects the actual codebase as verified locally: backend tests
+(41/41), `ruff check`, frontend `tsc`/`eslint`/`next build`, real Postgres
+migrations (`alembic upgrade head`), and the production commands below run
+end-to-end against local Postgres/Redis with the actual FastAPI, Celery, and
+Next.js standalone servers.
 
-- Docker 24+ and Docker Compose v2
-- Node.js 20+, Python 3.12+
-- Accounts: Clerk, Stripe, Anthropic, AWS/Cloudflare R2, Sentry, PostHog
-- Railway or Render account (backend), Vercel account (frontend)
+## Architecture
+
+```
+Vercel (Next.js frontend)
+   │  NEXT_PUBLIC_API_URL
+   ▼
+Railway
+   ├─ leadforge-api      (FastAPI, uvicorn --workers 4)
+   ├─ leadforge-worker   (Celery, concurrency 4)
+   ├─ PostgreSQL (managed plugin)
+   └─ Redis (managed plugin)
+```
+
+Backend and worker share the same Postgres and Redis. The frontend never
+talks to Postgres/Redis directly — everything goes through the API.
 
 ---
 
-## 1. Local Development
+## 1. Prerequisites — accounts to create before you start
 
-### Clone and configure
-
-```bash
-git clone https://github.com/yourorg/leadforge.git
-cd leadforge
-
-# Backend config
-cp backend/.env.example backend/.env
-# Edit backend/.env with your keys
-
-# Frontend config
-cp frontend/.env.example frontend/.env.local
-# Edit frontend/.env.local with your keys
-```
-
-### Start all services
-
-```bash
-docker compose up -d
-```
-
-This starts PostgreSQL, Redis, MinIO (local S3), the FastAPI server, Celery worker, Flower UI, and Next.js dev server.
-
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:3000 |
-| API | http://localhost:8000 |
-| API Docs | http://localhost:8000/docs |
-| Flower (queue) | http://localhost:5555 |
-| MinIO console | http://localhost:9001 |
-
-### Run migrations
-
-```bash
-docker compose exec api alembic upgrade head
-```
-
-### Create a MinIO bucket for local development
-
-```bash
-docker compose exec minio mc alias set local http://minio:9000 leadforge leadforge_dev
-docker compose exec minio mc mb local/leadforge-reports
-```
+| Service | Why | Where |
+|---|---|---|
+| Railway | Hosts API + worker + Postgres + Redis | railway.app |
+| Vercel | Hosts the Next.js frontend | vercel.com |
+| Clerk | Auth | clerk.com |
+| Stripe | Billing (live mode for real launch) | stripe.com |
+| Anthropic | AI generation | console.anthropic.com |
+| AWS S3 (or Cloudflare R2) | PDF report storage | — |
+| Sentry (optional but recommended) | Error tracking | sentry.io |
+| PostHog (optional) | Product analytics | posthog.com |
 
 ---
 
-## 2. Third-Party Service Configuration
+## 2. Backend — Railway
 
-### Clerk
+### 2.1 Create the project and services
 
-1. Create a new application at [clerk.com](https://clerk.com)
-2. Set allowed redirect URLs:
-   - Sign-in: `http://localhost:3000/sign-in`
-   - After sign-in: `http://localhost:3000/dashboard`
-3. Enable **Webhooks** → add endpoint `https://your-api.railway.app/api/v1/webhooks/clerk`
-   - Subscribe to: `user.created`, `user.deleted`, `user.updated`
-4. Copy `CLERK_SECRET_KEY` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-
-### Stripe
-
-1. Create products and prices in the Stripe Dashboard:
-
-```
-Product: LeadForge Starter
-  Price: £29/month recurring → copy price ID → STRIPE_PRICE_STARTER
-
-Product: LeadForge Pro
-  Price: £99/month recurring → copy price ID → STRIPE_PRICE_PRO
-
-Product: LeadForge Agency
-  Price: £299/month recurring → copy price ID → STRIPE_PRICE_AGENCY
+```bash
+railway login
+railway init          # from repo root
 ```
 
-2. Set success/cancel URLs in Stripe Checkout:
-   - Success: `https://yourdomain.com/dashboard?upgraded=true`
-   - Cancel: `https://yourdomain.com/dashboard/billing`
+Add two services from the same repo, each pointing at a different start
+command (Railway builds from `docker/Dockerfile.backend` / `Dockerfile.worker`
+automatically if you set the Dockerfile path, or use Nixpacks with the
+commands below — either works since both Dockerfiles' `prod` stage already
+run these):
 
-3. Add a webhook endpoint: `https://your-api/api/v1/webhooks/stripe`
-   - Events: `checkout.session.completed`, `invoice.payment_succeeded`, `customer.subscription.updated`, `customer.subscription.deleted`
+- **leadforge-api**
+  - Build: `docker/Dockerfile.backend`, target `prod`
+  - Start command (already the image's `CMD`): `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 4`
+  - Healthcheck path: `/health`
+- **leadforge-worker**
+  - Build: `docker/Dockerfile.worker`
+  - Start command (already the image's `CMD`): `celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q reports,default`
 
-### AWS S3
+Add managed **PostgreSQL** and **Redis** plugins to the project — Railway
+injects `DATABASE_URL` and `REDIS_URL` automatically, but the injected
+`DATABASE_URL` uses the plain `postgresql://` scheme. **You must override it**
+to add the asyncpg driver (see below) — the app uses SQLAlchemy's async
+engine throughout and will fail to start otherwise.
 
-1. Create an S3 bucket (or Cloudflare R2 bucket) named `leadforge-reports`
-2. Set bucket lifecycle: expire objects after 90 days
-3. Create an IAM user with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` on the bucket
-4. Note: Pre-signed URL expiry defaults to 7 days — adjust `PDF_URL_EXPIRY_SECONDS` in config
+### 2.2 Environment variables (leadforge-api and leadforge-worker — same values on both)
 
-### Anthropic
+```bash
+APP_ENV=production
+SECRET_KEY=<random 64-char string, e.g. `openssl rand -hex 32`>
+FRONTEND_URL=https://your-app.vercel.app
 
-1. Create an API key at [console.anthropic.com](https://console.anthropic.com)
-2. Set rate limits appropriate for your expected volume
-3. Recommended: set usage alerts at $50, $200, $500 intervals
+# Override Railway's injected DATABASE_URL to use the asyncpg driver:
+DATABASE_URL=postgresql+asyncpg://<user>:<pass>@<host>:<port>/<db>
+REDIS_URL=${{Redis.REDIS_URL}}     # Railway plugin reference
+
+CLERK_SECRET_KEY=sk_live_...
+CLERK_WEBHOOK_SECRET=whsec_...
+
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_STARTER=price_...
+STRIPE_PRICE_PRO=price_...
+STRIPE_PRICE_AGENCY=price_...
+
+ANTHROPIC_API_KEY=sk-ant-...
+
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-west-2
+S3_BUCKET_NAME=leadforge-reports
+
+SENTRY_DSN=https://...@sentry.io/...
+POSTHOG_API_KEY=phc_...
+
+FOUNDER_MODE=false
+FOUNDER_EMAIL=you@yourcompany.com
+DEMO_RATE_LIMIT_PER_IP_PER_DAY=5
+```
+
+`app/core/config.py`'s `validate_for_production()` runs on every boot and
+**exits the process immediately** (`sys.exit(1)`) if `APP_ENV=production` and
+any of `ANTHROPIC_API_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` are missing, if `SECRET_KEY` is
+short/default, or if `DATABASE_URL` doesn't contain `postgresql`. This is a
+real, verified gate — deploys will crash-loop rather than silently boot
+half-configured, which is the behaviour you want, but don't be surprised by
+it if a variable is missing.
+
+### 2.3 Run migrations after first deploy
+
+```bash
+railway run --service leadforge-api -- alembic upgrade head
+```
+
+This was broken in the original codebase (alembic's async engine fell back to
+a driver that isn't installed) and is fixed in this branch — confirmed
+working against a real Postgres instance during this pass.
+
+### 2.4 Verify
+
+```bash
+curl https://leadforge-api.up.railway.app/health
+# {"status":"ok","version":"2.0.0","env":"production","redis":"ok"}
+```
+
+`/docs` and `/openapi.json` are intentionally disabled when `APP_ENV=production`
+(confirmed by test — returns 404).
 
 ---
 
-## 3. Production Deployment
+## 3. Frontend — Vercel
 
-### Backend — Railway
-
-1. Install Railway CLI: `curl -fsSL https://railway.app/install.sh | sh`
-2. Login: `railway login`
-3. Create project: `railway init`
-4. Add services:
-   - **leadforge-api**: root command `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 4`
-   - **leadforge-worker**: root command `celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4`
-5. Add managed **PostgreSQL** and **Redis** plugins
-6. Set all environment variables from `backend/.env.example`
-7. Deploy: `railway up`
-
-**Run migrations on first deploy:**
-```bash
-railway run alembic upgrade head
-```
-
-### Frontend — Vercel
+Vercel auto-detects Next.js from `frontend/` — set the project root directory
+to `frontend` in the Vercel dashboard (or `vercel --cwd frontend`). It builds
+directly from source with `npm ci` (there's a committed `package-lock.json`),
+**not** from `docker/Dockerfile.frontend` — that Dockerfile exists only for
+teams who want to self-host the frontend in a container instead.
 
 ```bash
 cd frontend
-npx vercel
+npx vercel link
+npx vercel --prod
 ```
 
-Set environment variables in the Vercel dashboard:
-- `NEXT_PUBLIC_API_URL` → your Railway API URL
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
-
-### Alternative: Render
-
-For Render, create a `render.yaml`:
-```yaml
-services:
-  - type: web
-    name: leadforge-api
-    runtime: docker
-    dockerfilePath: docker/Dockerfile.backend
-    dockerContext: .
-    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - fromGroup: leadforge-production
-  - type: worker
-    name: leadforge-celery
-    runtime: docker
-    dockerfilePath: docker/Dockerfile.worker
-    dockerContext: .
-    envVars:
-      - fromGroup: leadforge-production
-```
-
----
-
-## 4. Database Migrations
+### Environment variables (Vercel dashboard → Settings → Environment Variables)
 
 ```bash
-# Create a new migration
-alembic revision --autogenerate -m "description of change"
-
-# Apply all pending migrations
-alembic upgrade head
-
-# Roll back one migration
-alembic downgrade -1
-
-# View migration history
-alembic history
-
-# Check current version
-alembic current
+NEXT_PUBLIC_API_URL=https://leadforge-api.up.railway.app
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+CLERK_SECRET_KEY=sk_live_...            # needed at runtime by clerkMiddleware, not just build
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...
+NEXT_PUBLIC_POSTHOG_KEY=phc_...          # optional
 ```
 
-Always test migrations against a staging database before running on production.
+`CLERK_SECRET_KEY` must be set as a **runtime** env var, not just at build
+time — this was verified directly: the standalone server throws
+`Missing secretKey` on every request until it's present in the running
+process's environment, independent of what was baked in at build time.
 
----
-
-## 5. CI/CD Pipeline
-
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push to `main`:
-
-1. **Backend tests** — pytest with real PostgreSQL + Redis
-2. **Frontend tests** — TypeScript check, ESLint, Next.js build
-3. **Docker build** — pushes images to GitHub Container Registry
-4. **Deploy staging** — Railway (backend) + Vercel (frontend)
-5. **Sentry release** — tags deployment for error tracking
-
-### Required GitHub Secrets
-
-| Secret | Where to get it |
-|--------|----------------|
-| `RAILWAY_TOKEN` | Railway dashboard → Account → Tokens |
-| `VERCEL_TOKEN` | Vercel dashboard → Account → Tokens |
-| `VERCEL_ORG_ID` | `vercel whoami` output |
-| `VERCEL_PROJECT_ID` | `.vercel/project.json` after first deploy |
-| `SENTRY_AUTH_TOKEN` | Sentry → Settings → Auth Tokens |
-| `SENTRY_ORG` | Your Sentry organisation slug |
-
----
-
-## 6. Monitoring
-
-### Sentry
-
-Error tracking is automatically configured via `SENTRY_DSN`. Set up:
-- **Alerts**: error rate > 1% over 5 minutes
-- **Performance**: P95 latency alerts
-- **Cron monitors**: for Celery task health
-
-### PostHog
-
-Events tracked automatically:
-- `sign_up`, `onboarded`
-- `project_created`, `report_completed`, `report_failed`
-- `pdf_downloaded`
-- `plan_upgraded`, `plan_cancelled`
-
-Build a funnel in PostHog: Sign Up → Onboard → Create Project → View Report → Upgrade
-
-### Flower (Celery monitoring)
-
-In production, run Flower as a separate Railway service:
-```
-celery -A app.tasks.celery_app flower --port=$PORT --basic_auth=admin:yourpassword
-```
-
----
-
-## 7. Security Checklist
-
-Before going live:
-
-- [ ] `SECRET_KEY` is a random 64-char string (not the example value)
-- [ ] `STRIPE_WEBHOOK_SECRET` verified against Stripe dashboard
-- [ ] `CLERK_WEBHOOK_SECRET` verified against Clerk dashboard
-- [ ] S3 bucket is **not** public — all access via pre-signed URLs only
-- [ ] Rate limiting is enabled (configured in `app/main.py` via `slowapi`)
-- [ ] CORS origin is locked to your frontend domain in production
-- [ ] All environment variables set (none missing from `.env.example`)
-- [ ] Sentry DSN is set and receiving events
-- [ ] Admin routes (`/admin/*`) are not accessible to non-admin users
-
----
-
-## 8. Scaling
-
-### Horizontal scaling (10,000+ users)
-
-| Layer | Approach |
-|-------|----------|
-| API | Scale `uvicorn --workers` or add Railway replicas |
-| Workers | Add more Celery worker instances (`--concurrency 8`) |
-| Database | Upgrade to PgBouncer connection pooling; read replicas for analytics |
-| Cache | Redis Cluster or Upstash |
-| PDF generation | Offload to dedicated `pdf` Celery queue |
-
-### Cost model at scale
-
-At 1,000 active Pro users generating 10 reports/month each:
-- 10,000 reports/month × ~$0.015 AI cost = **~$150/month in AI costs**
-- Revenue: 1,000 × £99 = **£99,000 MRR**
-- Gross margin on AI cost alone: **>99%**
-
-AI cost per report scales linearly; infrastructure costs are essentially fixed until ~50,000 reports/month.
-
----
-
-## 9. Troubleshooting
-
-### Celery task stuck in PENDING
+### Post-deploy checks
 
 ```bash
-# Check worker is running
-docker compose ps worker
-
-# Check task queue depth
-docker compose exec redis redis-cli llen celery
-
-# Restart worker
-docker compose restart worker
+curl -I https://your-app.vercel.app/           # 200
+curl -I https://your-app.vercel.app/demo       # 200
+curl -I https://your-app.vercel.app/dashboard  # redirects to /sign-in (unauthenticated)
 ```
-
-### PDF not generated
-
-```bash
-# Check worker logs
-docker compose logs worker --tail=100
-
-# Check S3 bucket exists and is writable
-aws s3 ls s3://leadforge-reports
-```
-
-### Report status polling hangs
-
-The frontend polls `/api/v1/projects/{id}/status` every 3 seconds. If the task is stuck:
-1. Check the `projects.task_id` in the DB matches a real Celery task ID
-2. Inspect via Flower: `http://localhost:5555/tasks/{task_id}`
-3. Manually requeue: call `POST /api/v1/projects/{id}/retry` (admin only)
 
 ---
 
-## 10. Project Structure
+## 4. Third-party service configuration
 
-```
-leadforge/
-├── backend/
-│   ├── app/
-│   │   ├── agents/          # 5-agent AI pipeline
-│   │   ├── api/v1/          # FastAPI route handlers
-│   │   ├── core/            # Config, DB, Redis
-│   │   ├── models/          # SQLAlchemy models
-│   │   ├── services/        # PDF generator
-│   │   └── tasks/           # Celery tasks
-│   ├── migrations/          # Alembic migrations
-│   ├── tests/
-│   │   ├── unit/
-│   │   └── integration/
-│   ├── alembic.ini
-│   └── requirements.txt
-├── frontend/
-│   └── src/
-│       ├── app/             # Next.js App Router pages
-│       │   └── dashboard/   # Authenticated pages
-│       └── lib/             # API client, utilities
-├── docker/
-│   ├── Dockerfile.backend
-│   ├── Dockerfile.frontend
-│   └── Dockerfile.worker
-├── .github/workflows/ci.yml
-├── docker-compose.yml
-└── docker-compose.prod.yml
-```
+### Clerk
+1. Create an application, switch to **production** instance for the live domain.
+2. Redirect URLs: sign-in `https://your-app.vercel.app/sign-in`, after sign-in `https://your-app.vercel.app/dashboard`.
+3. Webhooks → add endpoint `https://leadforge-api.up.railway.app/api/v1/webhooks/clerk`, subscribe to `user.created`, `user.updated`, `user.deleted`. Copy the signing secret into `CLERK_WEBHOOK_SECRET`.
+
+### Stripe
+1. Switch to **live mode**. Create three recurring products/prices: Starter £29/mo, Pro £99/mo, Agency £299/mo. Copy each price ID into `STRIPE_PRICE_*`.
+2. Webhooks → add endpoint `https://leadforge-api.up.railway.app/api/v1/webhooks/stripe`, subscribe to `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`. Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
+3. Both webhook handlers verify signatures (Svix for Clerk, Stripe's own for Stripe) — confirmed present in `app/api/v1/webhooks.py`. Unsigned/malformed requests are rejected with 400/503, not silently accepted.
+
+### Anthropic
+Create a key at console.anthropic.com. Set usage alerts (R2 in `docs/RISK_REGISTER.md` recommends $50/$200) — demo abuse is bounded by Redis rate limiting (5 runs/IP/day by default), confirmed present and wired into the demo generation endpoint.
+
+### S3 / R2
+Create a bucket, IAM user with `PutObject`/`GetObject`/`DeleteObject` scoped to it. Note: **`pdf_generator.py` is currently disconnected from the V2 pipeline** (see Known Issues below) — S3 isn't actually written to yet even though the config exists for it.
+
+---
+
+## 5. CI/CD
+
+`.github/workflows/ci.yml` runs backend tests (pytest against real Postgres +
+Redis service containers) and frontend checks (`tsc`, `eslint`, `next build`)
+on every push/PR, then builds and pushes Docker images and deploys to Railway
++ Vercel on `main`. Required GitHub secrets: `RAILWAY_TOKEN`, `VERCEL_TOKEN`,
+`VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`
+(Sentry step is optional if you don't set `SENTRY_DSN`).
+
+---
+
+## 6. Known issues carried into this deployment
+
+These are pre-existing gaps not fixed in this pass because they're feature
+work or need a product decision, not stability fixes:
+
+- **PDF export is not wired to the V2 pipeline** (`app/services/pdf_generator.py`
+  expects V1 field names and nothing calls it — no code path invokes it at
+  all). `docs/RISK_REGISTER.md` (R10) already flagged removing the "PDF
+  export" claim from billing plan feature lists as required-before-launch;
+  that text edit is done in this pass (`app/api/v1/billing.py`). Actually
+  implementing PDF export against the V2 data shape is still open — it's
+  feature work, out of scope here.
+- Legacy V1 SQLAlchemy models (`Project`, `Business`, `Report`, `Campaign`,
+  `ContentAsset`) are still declared in `app/models/__init__.py` and get
+  migrated as empty tables. Harmless but dead.
+- `docker-compose.prod.yml` (Swarm-style, nginx + TLS) references
+  `docker/nginx.conf` and `docker/ssl/`, neither of which exist in the repo.
+  It's an alternate self-hosted path, unused by the Railway+Vercel deploy
+  described here — fix it only if you actually intend to self-host.
+- Partial AI-generation failures (1-4 of 5 agents fail) still produce a
+  `completed` report with blank sections for the failed agents, with no
+  indication to the user which sections failed. Only *total* failure (all 5)
+  is now caught and marked `failed` — see the "Verified end-to-end" commit
+  for why that specific case matters most (it's what a bad/expired API key
+  or a full Anthropic outage looks like).
+
+---
+
+## 7. Troubleshooting
+
+**Backend crash-loops on boot in Railway** — check `validate_for_production()`'s
+stderr output in the deploy logs; it prints exactly which env var is missing.
+
+**Celery task stuck in `pending`** — worker isn't running or can't reach
+Redis. Check `leadforge-worker` logs; confirm `REDIS_URL` matches between
+api and worker services.
+
+**Generation completes but all 5 tabs are empty** — check the worker logs for
+`API error` from Anthropic (wrong/expired key, or Anthropic outage). As of
+this pass a *total* failure now surfaces as `status=failed` with a real error
+message instead of a blank "completed" report — if you still see this,
+you're on an older build.
+
+**`/dashboard` returns a raw 404 instead of redirecting to sign-in** — this
+happens when Clerk's publishable key doesn't correspond to a real Clerk
+instance (its dev-mode handshake redirect has nowhere valid to go). Confirm
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` are both real,
+matching keys from the same Clerk application.
