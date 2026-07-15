@@ -122,7 +122,7 @@ export default function OnboardingPage() {
             <div>
               <label className="label">Town, city, or area *</label>
               <input className="input mt-1" placeholder="e.g. Manchester, Birmingham" value={form.service_area} onChange={e => update("service_area", e.target.value)} autoFocus />
-              <p className="text-xs text-zinc-600 mt-2">Be specific — "North Manchester" beats "UK"</p>
+              <p className="text-xs text-zinc-600 mt-2">Be specific — &quot;North Manchester&quot; beats &quot;UK&quot;</p>
             </div>
           )}
 
@@ -130,7 +130,7 @@ export default function OnboardingPage() {
             <div>
               <label className="label">Website URL (optional)</label>
               <input className="input mt-1" placeholder="https://yourwebsite.co.uk" value={form.website_url} onChange={e => update("website_url", e.target.value)} autoFocus />
-              <p className="text-xs text-zinc-600 mt-2">No website? No problem — we'll cover it.</p>
+              <p className="text-xs text-zinc-600 mt-2">No website? No problem — we&apos;ll cover it.</p>
             </div>
           )}
 

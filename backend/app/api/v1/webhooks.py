@@ -62,7 +62,6 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 async def _handle_checkout_completed(db: AsyncSession, data: dict) -> None:
-    import stripe
     user_id = data.get("metadata", {}).get("user_id")
     plan = data.get("metadata", {}).get("plan", "starter")
     customer_id = data.get("customer")
@@ -233,7 +232,7 @@ async def clerk_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     # Verify Svix signature
     if settings.CLERK_WEBHOOK_SECRET:
         try:
-            from svix.webhooks import Webhook, WebhookVerificationError
+            from svix.webhooks import Webhook
             wh = Webhook(settings.CLERK_WEBHOOK_SECRET)
             headers = {
                 "svix-id": request.headers.get("svix-id", ""),

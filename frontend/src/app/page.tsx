@@ -121,7 +121,7 @@ export default function HomePage() {
       {/* Features */}
       <section className="px-6 pb-24 max-w-5xl mx-auto">
         <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold mb-3">Everything you need. Nothing you don't.</h2>
+          <h2 className="text-3xl font-bold mb-3">Everything you need. Nothing you don&apos;t.</h2>
           <p className="text-zinc-400">Five modules. One goal: more paying customers.</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -145,7 +145,7 @@ export default function HomePage() {
                   <Star key={i} className="w-4 h-4 text-amber-400 fill-amber-400" />
                 ))}
               </div>
-              <p className="text-zinc-300 text-sm leading-relaxed mb-4">"{t.quote}"</p>
+              <p className="text-zinc-300 text-sm leading-relaxed mb-4">&quot;{t.quote}&quot;</p>
               <div>
                 <p className="text-sm font-semibold text-white">{t.name}</p>
                 <p className="text-xs text-zinc-500">{t.trade}</p>

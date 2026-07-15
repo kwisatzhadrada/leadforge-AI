@@ -89,7 +89,7 @@ export default function DashboardPage() {
       {user?.plan_tier === "free" && limit && used >= limit && (
         <div className="card p-5 border-amber-700/40 flex items-center justify-between gap-4">
           <div>
-            <p className="font-semibold text-white">You've used your free generation</p>
+            <p className="font-semibold text-white">You&apos;ve used your free generation</p>
             <p className="text-sm text-zinc-400">Upgrade to get 5, 25, or unlimited growth packages per month.</p>
           </div>
           <Link href="/dashboard/billing" className="btn-primary whitespace-nowrap text-sm">Upgrade Plan</Link>

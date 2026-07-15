@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_admin_user
+from app.api.deps import get_admin_user
 from app.core.database import get_db
-from app.models import User, Generation, GenerationStatus, AnalyticsEvent, PlanTier
+from app.models import User, Generation, GenerationStatus, PlanTier
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -18,7 +18,6 @@ async def get_metrics(
 ):
     now = datetime.utcnow()
     week_ago = now - timedelta(days=7)
-    month_ago = now - timedelta(days=30)
 
     # Users
     total_users = (await db.execute(select(func.count(User.id)))).scalar()
@@ -59,7 +58,6 @@ async def get_metrics(
         plan_dist[tier.value] = count
 
     paid_users = sum(plan_dist.get(t, 0) for t in ("starter", "pro", "agency"))
-    free_users = plan_dist.get("free", 0)
     conversion_rate = (paid_users / max(total_users or 1, 1)) * 100
 
     return {

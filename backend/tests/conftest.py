@@ -4,14 +4,13 @@ Uses SQLite in-memory with type adaptation for PostgreSQL-specific types.
 All UUID values stored as strings in SQLite.
 """
 import asyncio
-import uuid
 import pytest
 import pytest_asyncio
 from unittest.mock import MagicMock
 
 # ── Patch PostgreSQL-specific types before importing models ───────────────────
 import sqlalchemy.dialects.postgresql as pg_dialect
-from sqlalchemy import JSON, String, TypeDecorator, CHAR
+from sqlalchemy import JSON, TypeDecorator, CHAR
 
 class _SQLiteUUID(TypeDecorator):
     """UUID stored as CHAR(36) text in SQLite, transparent to Python."""
@@ -30,7 +29,6 @@ pg_dialect.UUID = lambda **kw: _SQLiteUUID()  # type: ignore
 pg_dialect.JSONB = JSON  # type: ignore
 
 # ── Now import app modules ────────────────────────────────────────────────────
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from httpx import AsyncClient, ASGITransport

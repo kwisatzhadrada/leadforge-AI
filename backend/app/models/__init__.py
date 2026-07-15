@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, ForeignKey,
     Integer, Numeric, String, Text, func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 

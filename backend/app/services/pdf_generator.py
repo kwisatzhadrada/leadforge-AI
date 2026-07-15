@@ -1,18 +1,16 @@
 """PDF generation for LeadForge growth reports."""
 import io
-import os
 from datetime import datetime
 from typing import Optional
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm, cm
+from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    PageBreak, HRFlowable, KeepTogether
+    PageBreak, HRFlowable
 )
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.pdfgen import canvas
+from reportlab.lib.enums import TA_CENTER
 
 
 # ─── Brand Colours ────────────────────────────────────────────────────────────
@@ -160,7 +158,7 @@ class LeadForgePDFGenerator:
         # Main title block
         title_data = [[
             Paragraph(
-                f"<b>Customer Acquisition<br/>Growth Report</b>",
+                "<b>Customer Acquisition<br/>Growth Report</b>",
                 ParagraphStyle("cover_h1", fontSize=26, textColor=WHITE,
                     fontName="Helvetica-Bold", leading=32)
             )

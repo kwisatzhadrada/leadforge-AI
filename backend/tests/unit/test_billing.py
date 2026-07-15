@@ -1,7 +1,6 @@
 """Unit tests for billing logic and plan enforcement."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 
 
 class TestPlanLimits:

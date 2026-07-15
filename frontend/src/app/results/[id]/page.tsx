@@ -339,8 +339,8 @@ function GBPModule({ data }: { data: any }) {
 // ── Module: Content Quick-Wins ─────────────────────────────────────────────
 
 function ContentModule({ data }: { data: any }) {
-  if (!data) return null;
   const [section, setSection] = useState<"facebook" | "gbp" | "reviews" | "seasonal">("facebook");
+  if (!data) return null;
 
   const sections = [
     { id: "facebook" as const,  label: "Facebook Posts (10)", count: data.facebook_posts?.length },
@@ -450,8 +450,8 @@ function ContentModule({ data }: { data: any }) {
 // ── Module: Revenue Plan ───────────────────────────────────────────────────
 
 function PlanModule({ data }: { data: any }) {
-  if (!data) return null;
   const [expandedWeek, setExpandedWeek] = useState<number | null>(1);
+  if (!data) return null;
 
   return (
     <div className="space-y-6 fade-up">

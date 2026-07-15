@@ -137,7 +137,8 @@ def generate_growth_package(self, generation_id: str, founder_mode: bool = False
     try:
         _run_async(_generate_async(generation_id, self, founder_mode))
     except Exception as exc:
-        logger.error(f"Task {self.request.id} failed: {exc}", exc_info=True)
+        error_str = str(exc)
+        logger.error(f"Task {self.request.id} failed: {error_str}", exc_info=True)
         try:
             raise self.retry(exc=exc, countdown=30 * (self.request.retries + 1))
         except self.MaxRetriesExceededError:
@@ -153,7 +154,7 @@ def generate_growth_package(self, generation_id: str, founder_mode: bool = False
                     gen = await db.get(Generation, UUID(generation_id))
                     if gen and gen.status != GenerationStatus.completed:
                         gen.status = GenerationStatus.failed
-                        gen.error_message = f"Failed after {self.max_retries} retries: {exc}"
+                        gen.error_message = f"Failed after {self.max_retries} retries: {error_str}"
                         await db.commit()
                 await engine.dispose()
             _run_async(_mark_failed())
