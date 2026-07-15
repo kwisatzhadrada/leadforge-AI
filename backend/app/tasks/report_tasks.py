@@ -81,6 +81,20 @@ async def _generate_async(generation_id: str, task_self, founder_mode: bool = Fa
                 )
                 result = await pipeline.run()
 
+                agent_errors = result.get("errors") or []
+                if len(agent_errors) >= 5:
+                    # Every agent failed (e.g. Anthropic outage / bad key) — the
+                    # pipeline's per-agent recovery means run() never raises, so
+                    # this must be checked explicitly or "completed" reports go
+                    # out with entirely empty content.
+                    gen.status = GenerationStatus.failed
+                    gen.error_message = (
+                        f"AI generation failed: {agent_errors[0].get('error', 'unknown error')}"
+                    )[:2000]
+                    await db.commit()
+                    logger.error(f"Generation {generation_id[:8]} failed — all agents errored: {agent_errors}")
+                    return
+
                 gen.lead_opportunities = result.get("lead_opportunities") or {}
                 gen.quote_followup     = result.get("quote_followup") or {}
                 gen.gbp_optimizer      = result.get("gbp_optimizer") or {}
@@ -113,6 +127,7 @@ async def _generate_async(generation_id: str, task_self, founder_mode: bool = Fa
                     f"cost=${result.get('total_cost_usd', 0):.4f} "
                     f"tokens={result.get('total_tokens', 0)} "
                     f"time={result.get('generation_time_seconds', 0):.1f}s"
+                    + (f" ({len(agent_errors)} agent(s) failed, partial report)" if agent_errors else "")
                 )
 
             except Exception as e:
