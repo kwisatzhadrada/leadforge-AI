@@ -5,6 +5,7 @@ import sys
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,23 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://leadforge:leadforge_dev@localhost:5432/leadforge"
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _force_asyncpg_driver(cls, v: str) -> str:
+        """
+        Railway (and Heroku-style hosts) inject a driverless
+        postgres://... or postgresql://... URL. SQLAlchemy's async engine
+        needs the asyncpg driver explicit, or it falls back to psycopg2
+        (not installed — this app only depends on asyncpg) and fails with
+        ModuleNotFoundError at startup. Normalise regardless of source so
+        a plain host-provided URL always works without manual editing.
+        """
+        if v.startswith("postgres://"):
+            v = "postgresql://" + v[len("postgres://"):]
+        if v.startswith("postgresql://"):
+            v = "postgresql+asyncpg://" + v[len("postgresql://"):]
+        return v
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
