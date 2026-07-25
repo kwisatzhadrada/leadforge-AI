@@ -10,6 +10,7 @@ export default function SignInPage() {
           <p className="text-gray-400 mt-2 text-sm">Sign in to your account</p>
         </div>
         <SignIn
+          forceRedirectUrl="/dashboard"
           appearance={{
             elements: {
               card: "bg-gray-900 border border-gray-800 shadow-xl",

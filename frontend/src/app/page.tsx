@@ -1,5 +1,3 @@
-"use client"; // TEMP DEBUG: required so the onClick handlers below are allowed at all — revert after diagnosis
-
 import Link from "next/link";
 import { ArrowRight, Zap, Users, TrendingUp, CheckCircle2, Star } from "lucide-react";
 
@@ -67,14 +65,9 @@ export default function HomePage() {
             <Link href="/demo" className="text-sm text-zinc-400 hover:text-white transition-colors font-medium">
               Try Demo
             </Link>
-            {/* TEMP DEBUG: plain <a> + onClick logging to isolate click-interception vs router-navigation failure */}
-            <a
-              href="/sign-in"
-              onClick={() => console.log("BUTTON CLICKED: Sign in")}
-              className="text-sm text-zinc-400 hover:text-white transition-colors"
-            >
+            <Link href="/sign-in" className="text-sm text-zinc-400 hover:text-white transition-colors">
               Sign in
-            </a>
+            </Link>
             <Link href="/demo" className="btn-primary text-sm">
               Get More Customers →
             </Link>
@@ -103,14 +96,9 @@ export default function HomePage() {
           <Link href="/demo" className="btn-primary text-base px-8 py-3 flex items-center gap-2">
             Run Free Demo <ArrowRight className="w-4 h-4" />
           </Link>
-          {/* TEMP DEBUG: plain <a> + onClick logging to isolate click-interception vs router-navigation failure */}
-          <a
-            href="/sign-up"
-            onClick={() => console.log("BUTTON CLICKED: Start Free")}
-            className="btn-outline text-base px-6 py-3"
-          >
+          <Link href="/sign-up" className="btn-outline text-base px-6 py-3">
             Start Free — No Card Required
-          </a>
+          </Link>
         </div>
         <div className="flex items-center justify-center gap-6 mt-8 text-sm text-zinc-500">
           <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-green-500" />No signup for demo</span>

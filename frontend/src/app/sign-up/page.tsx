@@ -12,6 +12,7 @@ export default function SignUpPage() {
           </p>
         </div>
         <SignUp
+          forceRedirectUrl="/dashboard"
           appearance={{
             elements: {
               card: "bg-gray-900 border border-gray-800 shadow-xl",
