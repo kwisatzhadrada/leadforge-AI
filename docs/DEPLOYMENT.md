@@ -63,24 +63,32 @@ run these):
   - Start command (already the image's `CMD`): `celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q reports,default`
 
 Add managed **PostgreSQL** and **Redis** plugins to the project — Railway
-injects `DATABASE_URL` and `REDIS_URL` automatically, but the injected
-`DATABASE_URL` uses the plain `postgresql://` scheme. **You must override it**
-to add the asyncpg driver (see below) — the app uses SQLAlchemy's async
-engine throughout and will fail to start otherwise.
+injects `DATABASE_URL` (plain `postgresql://`, no driver) and `REDIS_URL`
+automatically. No manual override needed: `Settings.DATABASE_URL` normalises
+`postgres://`/`postgresql://` to `postgresql+asyncpg://` automatically,
+regardless of what's injected.
 
-### 2.2 Environment variables (leadforge-api and leadforge-worker — same values on both)
+### 2.2 Environment variables
+
+Same values on both services, except `CLERK_ISSUER` (api only — see below).
 
 ```bash
 APP_ENV=production
 SECRET_KEY=<random 64-char string, e.g. `openssl rand -hex 32`>
 FRONTEND_URL=https://your-app.vercel.app
 
-# Override Railway's injected DATABASE_URL to use the asyncpg driver:
-DATABASE_URL=postgresql+asyncpg://<user>:<pass>@<host>:<port>/<db>
-REDIS_URL=${{Redis.REDIS_URL}}     # Railway plugin reference
+DATABASE_URL=${{Postgres.DATABASE_URL}}   # Railway plugin reference — plain postgresql://
+                                           # is fine, Settings normalises it to +asyncpg automatically
+REDIS_URL=${{Redis.REDIS_URL}}            # Railway plugin reference
 
 CLERK_SECRET_KEY=sk_live_...
 CLERK_WEBHOOK_SECRET=whsec_...
+# Frontend API issuer for this Clerk instance — Clerk Dashboard > API Keys,
+# or the "iss" claim of a decoded session JWT, e.g.
+# https://brave-elk-85.clerk.accounts.dev (dev instance) or your custom
+# domain in production. Required for local JWT/JWKS verification — see
+# app/api/deps.py.
+CLERK_ISSUER=https://your-instance.clerk.accounts.dev
 
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
@@ -106,11 +114,14 @@ DEMO_RATE_LIMIT_PER_IP_PER_DAY=5
 `app/core/config.py`'s `validate_for_production()` runs on every boot and
 **exits the process immediately** (`sys.exit(1)`) if `APP_ENV=production` and
 any of `ANTHROPIC_API_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`,
-`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` are missing, if `SECRET_KEY` is
-short/default, or if `DATABASE_URL` doesn't contain `postgresql`. This is a
-real, verified gate — deploys will crash-loop rather than silently boot
-half-configured, which is the behaviour you want, but don't be surprised by
-it if a variable is missing.
+`CLERK_ISSUER`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` are missing, if
+`SECRET_KEY` is short/default, or if `DATABASE_URL` doesn't contain
+`postgresql`. This is a real, verified gate — deploys will crash-loop rather
+than silently boot half-configured, which is the behaviour you want, but
+don't be surprised by it if a variable is missing.
+
+`CLERK_ISSUER` is only needed on `leadforge-api`, not `leadforge-worker` —
+Celery tasks never verify a user's session token.
 
 ### 2.3 Run migrations after first deploy
 

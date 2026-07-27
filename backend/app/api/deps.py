@@ -43,28 +43,34 @@ def _token_preview(token: str) -> str:
 
 async def _fetch_jwks(force_refresh: bool = False) -> list[dict]:
     """
-    Fetch Clerk's JSON Web Key Set for local, networkless JWT verification.
-    This replaces a previous implementation that POSTed the raw token to
-    https://api.clerk.dev/v1/tokens/verify on every request — clerk.dev is
-    Clerk's pre-rebrand legacy domain and that endpoint is not part of
-    Clerk's current documented Backend API, which is the suspected cause
-    of every authenticated request 401ing regardless of token validity.
-    Local JWKS verification is the approach Clerk's own official SDKs use.
+    Fetch Clerk's JSON Web Key Set for local, networkless JWT verification,
+    from the standard OIDC discovery path off this instance's own issuer
+    (CLERK_ISSUER, e.g. https://brave-elk-85.clerk.accounts.dev) — a public
+    endpoint, no secret key needed for this call. This is the standard,
+    documented pattern: verify a JWT's signature using JWKS fetched from
+    {iss}/.well-known/jwks.json, and separately confirm the token's own
+    "iss" claim equals your configured, trusted issuer (done in
+    _verify_clerk_token) so a token can't point verification at an
+    attacker-controlled issuer.
+
+    An earlier version of this function called Clerk's Backend API
+    (https://api.clerk.com/v1/jwks, secret-key authenticated) instead, and
+    before that POSTed to https://api.clerk.dev/v1/tokens/verify (Clerk's
+    pre-rebrand legacy domain) on every request — both replaced because
+    they left every authenticated request 401ing.
     """
     now = time.time()
     if not force_refresh and _jwks_cache["keys"] and (now - _jwks_cache["fetched_at"]) < _JWKS_TTL_SECONDS:
         return _jwks_cache["keys"]
 
+    jwks_url = f"{settings.CLERK_ISSUER}/.well-known/jwks.json"
     async with httpx.AsyncClient(timeout=8.0) as client:
-        resp = await client.get(
-            "https://api.clerk.com/v1/jwks",
-            headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
-        )
+        resp = await client.get(jwks_url)
     resp.raise_for_status()
     keys = resp.json().get("keys", [])
     _jwks_cache["keys"] = keys
     _jwks_cache["fetched_at"] = now
-    logger.info(f"Fetched Clerk JWKS: {len(keys)} key(s)")
+    logger.info(f"Fetched Clerk JWKS from {jwks_url}: {len(keys)} key(s)")
     return keys
 
 
@@ -103,6 +109,10 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
         logger.warning(f"Token {preview}: JWT header missing 'kid'")
         return None
 
+    if not settings.CLERK_ISSUER:
+        logger.error(f"Token {preview}: CLERK_ISSUER is not configured — cannot verify any token")
+        return None
+
     try:
         keys = await _fetch_jwks()
         matching_key = next((k for k in keys if k.get("kid") == kid), None)
@@ -131,6 +141,7 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             token,
             matching_key,
             algorithms=["RS256"],
+            issuer=settings.CLERK_ISSUER,
             options={"verify_aud": False},  # Clerk session tokens don't set aud
         )
     except JOSEError as e:

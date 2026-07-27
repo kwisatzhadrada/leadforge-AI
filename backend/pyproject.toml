@@ -1,6 +1,15 @@
 [tool.ruff]
 target-version = "py312"
 
+[tool.ruff.lint]
+# Pin the rule set explicitly rather than relying on ruff's default
+# selection, which has changed between ruff versions (0.16.0 enabled a
+# batch of new-by-default rules — B008, I001, UP045, BLE001, DTZ*, etc. —
+# that this codebase was never written against, and CI installs ruff
+# unpinned on every run). E4/E7/E9/F is ruff's own long-standing classic
+# default and is what this project has actually been checked against.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.lint.per-file-ignores]
 # Patches PostgreSQL-only types before importing app modules for SQLite test runs.
 "tests/conftest.py" = ["E402"]

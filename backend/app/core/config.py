@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     # Clerk
     CLERK_SECRET_KEY: str = ""
     CLERK_WEBHOOK_SECRET: str = ""
+    # Frontend API issuer for this Clerk instance, e.g.
+    # "https://brave-elk-85.clerk.accounts.dev" (dev instance) or your
+    # custom domain in production. Find it in Clerk Dashboard -> API Keys,
+    # or as the "iss" claim of a decoded session JWT. Used to fetch JWKS
+    # from {CLERK_ISSUER}/.well-known/jwks.json for local token
+    # verification, and to validate the "iss" claim on every token.
+    CLERK_ISSUER: str = ""
+
+    @field_validator("CLERK_ISSUER")
+    @classmethod
+    def _strip_trailing_slash(cls, v: str) -> str:
+        return v.rstrip("/")
 
     # Stripe
     STRIPE_SECRET_KEY: str = ""
@@ -109,6 +121,9 @@ class Settings(BaseSettings):
 
         if not self.CLERK_WEBHOOK_SECRET:
             errors.append("CLERK_WEBHOOK_SECRET is not set")
+
+        if not self.CLERK_ISSUER:
+            errors.append("CLERK_ISSUER is not set (e.g. https://your-instance.clerk.accounts.dev)")
 
         if not self.STRIPE_SECRET_KEY:
             errors.append("STRIPE_SECRET_KEY is not set")
