@@ -7,11 +7,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
 import httpx
 from fastapi import Depends, HTTPException, Request
+from jose import jwt
+from jose.exceptions import JOSEError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +26,9 @@ from app.models import Generation, GenerationStatus, PlanTier, User
 logger = logging.getLogger(__name__)
 
 _CLERK_TOKEN_TTL = 300  # 5 minutes — Clerk tokens are short-lived
+_JWKS_TTL_SECONDS = 3600  # Clerk's signing keys rotate rarely; cache in-process
+
+_jwks_cache: dict = {"keys": [], "fetched_at": 0.0}
 
 
 def _token_cache_key(token: str) -> str:
@@ -30,11 +36,45 @@ def _token_cache_key(token: str) -> str:
     return f"clerk_token:{hashlib.sha256(token.encode()).hexdigest()[:32]}"
 
 
-async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
-    """Verify Clerk JWT. Caches result in Redis for 5 minutes."""
-    cache_key = _token_cache_key(token)
+def _token_preview(token: str) -> str:
+    """Short, non-sensitive fingerprint for logs — never the raw token."""
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
 
-    # Check cache first
+
+async def _fetch_jwks(force_refresh: bool = False) -> list[dict]:
+    """
+    Fetch Clerk's JSON Web Key Set for local, networkless JWT verification.
+    This replaces a previous implementation that POSTed the raw token to
+    https://api.clerk.dev/v1/tokens/verify on every request — clerk.dev is
+    Clerk's pre-rebrand legacy domain and that endpoint is not part of
+    Clerk's current documented Backend API, which is the suspected cause
+    of every authenticated request 401ing regardless of token validity.
+    Local JWKS verification is the approach Clerk's own official SDKs use.
+    """
+    now = time.time()
+    if not force_refresh and _jwks_cache["keys"] and (now - _jwks_cache["fetched_at"]) < _JWKS_TTL_SECONDS:
+        return _jwks_cache["keys"]
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        resp = await client.get(
+            "https://api.clerk.com/v1/jwks",
+            headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
+        )
+    resp.raise_for_status()
+    keys = resp.json().get("keys", [])
+    _jwks_cache["keys"] = keys
+    _jwks_cache["fetched_at"] = now
+    logger.info(f"Fetched Clerk JWKS: {len(keys)} key(s)")
+    return keys
+
+
+async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
+    """Verify a Clerk session JWT locally against Clerk's JWKS, and resolve
+    it to our own User row. Caches the resolved clerk_id in Redis for 5
+    minutes so we don't redo signature verification on every request."""
+    cache_key = _token_cache_key(token)
+    preview = _token_preview(token)
+
     cached = await cache_get(cache_key)
     if cached:
         try:
@@ -42,38 +82,78 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             clerk_id = data.get("clerk_id")
             if clerk_id:
                 result = await db.execute(select(User).where(User.clerk_id == clerk_id))
-                return result.scalar_one_or_none()
+                user = result.scalar_one_or_none()
+                if not user:
+                    logger.warning(
+                        f"Token {preview}: cached clerk_id={clerk_id} verified but no matching "
+                        f"User row exists (Clerk webhook may not have provisioned this user yet)"
+                    )
+                return user
         except Exception:
             pass
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post(
-                "https://api.clerk.dev/v1/tokens/verify",
-                headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
-                json={"token": token},
-            )
-        if resp.status_code != 200:
-            logger.warning(f"Clerk token verification failed: {resp.status_code}")
+        unverified_header = jwt.get_unverified_header(token)
+    except JOSEError as e:
+        logger.warning(f"Token {preview}: malformed JWT header — {e}")
+        return None
+
+    kid = unverified_header.get("kid")
+    if not kid:
+        logger.warning(f"Token {preview}: JWT header missing 'kid'")
+        return None
+
+    try:
+        keys = await _fetch_jwks()
+        matching_key = next((k for k in keys if k.get("kid") == kid), None)
+        if not matching_key:
+            # Key may have rotated since our last fetch — refresh once and retry.
+            keys = await _fetch_jwks(force_refresh=True)
+            matching_key = next((k for k in keys if k.get("kid") == kid), None)
+        if not matching_key:
+            logger.warning(f"Token {preview}: no JWKS key found for kid={kid}")
             return None
-
-        claims = resp.json()
-        clerk_id = claims.get("sub")
-        if not clerk_id:
-            return None
-
-        # Cache the clerk_id
-        await cache_set(cache_key, json.dumps({"clerk_id": clerk_id}), ttl=_CLERK_TOKEN_TTL)
-
-        result = await db.execute(select(User).where(User.clerk_id == clerk_id))
-        return result.scalar_one_or_none()
-
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Token {preview}: fetching Clerk JWKS failed — "
+            f"{e.response.status_code} {e.response.text[:300]}"
+        )
+        return None
     except httpx.TimeoutException:
-        logger.error("Clerk token verification timed out")
+        logger.error(f"Token {preview}: fetching Clerk JWKS timed out")
         return None
     except Exception as e:
-        logger.error(f"Clerk token verification error: {e}")
+        logger.error(f"Token {preview}: fetching Clerk JWKS errored — {type(e).__name__}: {e}")
         return None
+
+    try:
+        claims = jwt.decode(
+            token,
+            matching_key,
+            algorithms=["RS256"],
+            options={"verify_aud": False},  # Clerk session tokens don't set aud
+        )
+    except JOSEError as e:
+        logger.warning(f"Token {preview}: signature/claims verification failed — {type(e).__name__}: {e}")
+        return None
+
+    clerk_id = claims.get("sub")
+    if not clerk_id:
+        logger.warning(f"Token {preview}: verified JWT has no 'sub' claim")
+        return None
+
+    await cache_set(cache_key, json.dumps({"clerk_id": clerk_id}), ttl=_CLERK_TOKEN_TTL)
+
+    result = await db.execute(select(User).where(User.clerk_id == clerk_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        logger.warning(
+            f"Token {preview}: JWT verified OK for clerk_id={clerk_id} but no matching User row "
+            f"exists — check the Clerk webhook (user.created) actually fired and was accepted"
+        )
+    else:
+        logger.info(f"Token {preview}: verified — clerk_id={clerk_id} user_id={user.id}")
+    return user
 
 
 def _extract_bearer(request: Request) -> Optional[str]:
@@ -110,6 +190,11 @@ async def get_current_user(
 
     token = _extract_bearer(request)
     if not token:
+        has_auth_header = "Authorization" in request.headers
+        logger.warning(
+            f"{request.method} {request.url.path}: no bearer token — "
+            f"Authorization header {'present but not Bearer-scheme' if has_auth_header else 'missing entirely'}"
+        )
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     user = await _verify_clerk_token(token, db)
@@ -141,6 +226,11 @@ async def get_optional_user(
 
     token = _extract_bearer(request)
     if not token:
+        has_auth_header = "Authorization" in request.headers
+        logger.warning(
+            f"{request.method} {request.url.path}: no bearer token — "
+            f"Authorization header {'present but not Bearer-scheme' if has_auth_header else 'missing entirely'}"
+        )
         return None
     return await _verify_clerk_token(token, db)
 
