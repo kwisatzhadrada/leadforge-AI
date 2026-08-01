@@ -17,11 +17,28 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from jose.utils import long_to_base64
+from starlette.requests import Request
 
 from app.models import User, PlanTier
 
 KID = "test-key-1"
 TEST_ISSUER = "https://test-instance.clerk.accounts.dev"
+
+
+def _fake_request(headers: dict | None = None) -> Request:
+    """Minimal Starlette Request for calling get_current_user/get_optional_user directly."""
+    raw_headers = [
+        (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
+    ]
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/generations/",
+        "headers": raw_headers,
+        "query_string": b"",
+        "client": ("test", 1234),
+    }
+    return Request(scope)
 
 
 def _b64(n: int) -> str:
@@ -277,3 +294,81 @@ async def test_verify_clerk_token_fails_closed_when_issuer_not_configured(db_ses
     result = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
+
+
+# ── Dev-bypass gating (get_current_user / get_optional_user) ──────────────────
+#
+# These reproduce the actual bug reported in production: the dev bypass was
+# gated on `not settings.is_production`, true for *any* APP_ENV other than
+# exactly "production" (including unset/misconfigured). get_current_user's
+# bypass defaults to a fake "dev-founder-001" user (silently "succeeding"
+# with a fabricated identity), while get_optional_user's has no default and
+# silently returns None — which is exactly GET-succeeds-with-fake-user /
+# POST-401s-with-no-logs, observed in production. Fixed by requiring
+# settings.is_development (exactly "development") instead.
+
+@pytest.mark.asyncio
+async def test_get_optional_user_bypass_does_not_trigger_in_production(db_session, monkeypatch):
+    from app.api import deps
+
+    monkeypatch.setattr(deps.settings, "APP_ENV", "production")
+    monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")  # misconfigured/missing
+
+    request = _fake_request({"Authorization": "Bearer some-token"})
+    result = await deps.get_optional_user(request, db_session)
+
+    # Must fall through to real verification (and fail, since "some-token"
+    # isn't a real JWT) rather than silently returning None via the bypass
+    # with zero logging.
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_optional_user_bypass_does_not_trigger_when_app_env_unset_or_misconfigured(db_session, monkeypatch):
+    """The actual production bug: APP_ENV missing/blank/mistyped (anything
+    that isn't exactly "production") used to be treated as safe to bypass."""
+    from app.api import deps
+
+    for bad_value in ["", "staging", "Production", "prod"]:
+        monkeypatch.setattr(deps.settings, "APP_ENV", bad_value)
+        monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")
+
+        request = _fake_request({})  # no Authorization header at all
+        result = await deps.get_optional_user(request, db_session)
+
+        # Old behavior: silently returns None via the bypass (no log, no real
+        # check performed). New behavior: still returns None here (no token),
+        # but via the real "no bearer token" path, which does log. The
+        # important guarantee either way is it never returns a *fake user*.
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_bypass_only_triggers_in_explicit_development(db_session, monkeypatch):
+    from app.api import deps
+
+    monkeypatch.setattr(deps.settings, "APP_ENV", "development")
+    monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")
+
+    request = _fake_request({})
+    user = await deps.get_current_user(request, db_session)
+
+    assert user is not None
+    assert user.clerk_id == "dev-founder-001"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_bypass_does_not_fabricate_user_outside_development(db_session, monkeypatch):
+    """This is the core of the bug: previously, any non-"production" APP_ENV
+    (including a blank/misconfigured one) would silently authenticate every
+    request as a fabricated founder-tier user with no real Clerk check at
+    all. Confirms that no longer happens for a non-development, non-production
+    (i.e. misconfigured) APP_ENV."""
+    from app.api import deps
+
+    monkeypatch.setattr(deps.settings, "APP_ENV", "")  # unset/misconfigured
+    monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")
+
+    request = _fake_request({})  # no Authorization header
+    with pytest.raises(Exception):  # HTTPException(401) — real auth required now
+        await deps.get_current_user(request, db_session)

@@ -224,8 +224,19 @@ async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    # Dev bypass — ONLY when no Clerk key configured AND not in production
-    if not settings.CLERK_SECRET_KEY and not settings.is_production:
+    # Dev bypass — ONLY when explicitly APP_ENV=development AND no Clerk key
+    # configured. Previously gated on `not settings.is_production` (true for
+    # *any* APP_ENV value other than exactly "production", including unset
+    # or misconfigured) which is exactly how this would silently activate on
+    # a real deployment if APP_ENV were ever missing/wrong: this branch
+    # fabricates a fake founder-tier user for every request with zero
+    # verification and zero logging, since it runs before anything else in
+    # this function. Narrowed to require an explicit "development" so a
+    # misconfigured APP_ENV fails closed (falls through to real Clerk
+    # verification, which logs and 401s properly) instead of failing open.
+    print(f"[CLERK_DEBUG] get_current_user: APP_ENV={settings.APP_ENV!r} is_development={settings.is_development} "
+          f"CLERK_SECRET_KEY_set={bool(settings.CLERK_SECRET_KEY)}", flush=True)
+    if not settings.CLERK_SECRET_KEY and settings.is_development:
         dev_id = request.headers.get("X-Dev-User-Id", "dev-founder-001")
         return await _dev_user(dev_id, db)
 
@@ -267,7 +278,14 @@ async def get_optional_user(
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     """Returns authenticated user or None — for demo endpoints."""
-    if not settings.CLERK_SECRET_KEY and not settings.is_production:
+    # See get_current_user for why this is gated on settings.is_development
+    # rather than `not settings.is_production` — narrowed for the same
+    # fail-closed reason. This branch previously returned None silently
+    # here (no X-Dev-User-Id header, which the frontend never sends) with
+    # zero logging, since it's the first thing in the function.
+    print(f"[CLERK_DEBUG] get_optional_user: APP_ENV={settings.APP_ENV!r} is_development={settings.is_development} "
+          f"CLERK_SECRET_KEY_set={bool(settings.CLERK_SECRET_KEY)}", flush=True)
+    if not settings.CLERK_SECRET_KEY and settings.is_development:
         dev_id = request.headers.get("X-Dev-User-Id")
         if dev_id:
             return await _dev_user(dev_id, db)
