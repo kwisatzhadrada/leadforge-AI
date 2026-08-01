@@ -81,6 +81,14 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
     cache_key = _token_cache_key(token)
     preview = _token_preview(token)
 
+    # TEMP DEBUG: raw print()s alongside the normal logger calls below, to
+    # rule out a logging-framework/propagation issue (module-level filtering,
+    # multi-worker stdout capture, log-platform filtering by logger name)
+    # as the reason app.api.deps lines weren't appearing in Railway despite
+    # app.api.v1.generations lines from the same request appearing fine.
+    # Remove once the missing-logs mystery is resolved.
+    print(f"[CLERK_DEBUG] _verify_clerk_token ENTER token={preview}", flush=True)
+
     cached = await cache_get(cache_key)
     if cached:
         try:
@@ -94,23 +102,29 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
                         f"Token {preview}: cached clerk_id={clerk_id} verified but no matching "
                         f"User row exists (Clerk webhook may not have provisioned this user yet)"
                     )
+                print(f"[CLERK_DEBUG] {preview}: cache hit, clerk_id={clerk_id}, user_found={bool(user)}", flush=True)
                 return user
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Token {preview}: error reading cached verification result — {type(e).__name__}: {e}")
+            print(f"[CLERK_DEBUG] {preview}: cache-read exception {type(e).__name__}: {e}", flush=True)
+            # fall through to full verification below
 
     try:
         unverified_header = jwt.get_unverified_header(token)
     except JOSEError as e:
         logger.warning(f"Token {preview}: malformed JWT header — {e}")
+        print(f"[CLERK_DEBUG] {preview}: malformed header {type(e).__name__}: {e}", flush=True)
         return None
 
     kid = unverified_header.get("kid")
+    print(f"[CLERK_DEBUG] {preview}: header kid={kid} alg={unverified_header.get('alg')}", flush=True)
     if not kid:
         logger.warning(f"Token {preview}: JWT header missing 'kid'")
         return None
 
     if not settings.CLERK_ISSUER:
         logger.error(f"Token {preview}: CLERK_ISSUER is not configured — cannot verify any token")
+        print(f"[CLERK_DEBUG] {preview}: CLERK_ISSUER not configured", flush=True)
         return None
 
     try:
@@ -122,19 +136,25 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             matching_key = next((k for k in keys if k.get("kid") == kid), None)
         if not matching_key:
             logger.warning(f"Token {preview}: no JWKS key found for kid={kid}")
+            print(f"[CLERK_DEBUG] {preview}: no JWKS key for kid={kid}; fetched kids={[k.get('kid') for k in keys]}", flush=True)
             return None
     except httpx.HTTPStatusError as e:
         logger.error(
             f"Token {preview}: fetching Clerk JWKS failed — "
             f"{e.response.status_code} {e.response.text[:300]}"
         )
+        print(f"[CLERK_DEBUG] {preview}: JWKS fetch HTTP error {e.response.status_code}: {e.response.text[:300]}", flush=True)
         return None
     except httpx.TimeoutException:
         logger.error(f"Token {preview}: fetching Clerk JWKS timed out")
+        print(f"[CLERK_DEBUG] {preview}: JWKS fetch timed out", flush=True)
         return None
     except Exception as e:
         logger.error(f"Token {preview}: fetching Clerk JWKS errored — {type(e).__name__}: {e}")
+        print(f"[CLERK_DEBUG] {preview}: JWKS fetch exception {type(e).__name__}: {e}", flush=True)
         return None
+
+    print(f"[CLERK_DEBUG] {preview}: JWKS key found for kid={kid}, attempting jwt.decode", flush=True)
 
     try:
         claims = jwt.decode(
@@ -149,9 +169,15 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
         )
     except JOSEError as e:
         logger.warning(f"Token {preview}: signature/claims verification failed — {type(e).__name__}: {e}")
+        print(f"[CLERK_DEBUG] {preview}: jwt.decode failed — {type(e).__name__}: {e}", flush=True)
+        return None
+    except Exception as e:
+        logger.error(f"Token {preview}: unexpected exception in jwt.decode — {type(e).__name__}: {e}", exc_info=True)
+        print(f"[CLERK_DEBUG] {preview}: jwt.decode UNEXPECTED exception {type(e).__name__}: {e}", flush=True)
         return None
 
     clerk_id = claims.get("sub")
+    print(f"[CLERK_DEBUG] {preview}: jwt.decode OK, sub={clerk_id}, iss={claims.get('iss')}", flush=True)
     if not clerk_id:
         logger.warning(f"Token {preview}: verified JWT has no 'sub' claim")
         return None
@@ -167,6 +193,7 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
         )
     else:
         logger.info(f"Token {preview}: verified — clerk_id={clerk_id} user_id={user.id}")
+    print(f"[CLERK_DEBUG] {preview}: DB lookup for clerk_id={clerk_id} -> user_found={bool(user)}", flush=True)
     return user
 
 
@@ -254,6 +281,7 @@ async def get_optional_user(
             f"Authorization header {'present but not Bearer-scheme' if has_auth_header else 'missing entirely'}"
         )
         return None
+    print(f"[CLERK_DEBUG] get_optional_user: about to call _verify_clerk_token, token={_token_preview(token)}", flush=True)
     try:
         user = await _verify_clerk_token(token, db)
     except Exception as e:
@@ -262,6 +290,7 @@ async def get_optional_user(
         # exception here surfaces in logs instead of propagating as an
         # opaque 500, or - via FastAPI's dependency error handling -
         # potentially masking as a 401 with no explanation.
+        print(f"[CLERK_DEBUG] get_optional_user: _verify_clerk_token RAISED {type(e).__name__}: {e}", flush=True)
         logger.error(
             f"{request.method} {request.url.path}: unexpected exception in _verify_clerk_token "
             f"— {type(e).__name__}: {e}",
