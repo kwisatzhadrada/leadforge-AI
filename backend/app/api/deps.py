@@ -142,7 +142,10 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             matching_key,
             algorithms=["RS256"],
             issuer=settings.CLERK_ISSUER,
-            options={"verify_aud": False},  # Clerk session tokens don't set aud
+            options={
+                "verify_aud": False,  # Clerk session tokens don't set aud
+                "leeway": 30,  # tolerate clock skew between this host and Clerk on exp/nbf
+            },
         )
     except JOSEError as e:
         logger.warning(f"Token {preview}: signature/claims verification failed — {type(e).__name__}: {e}")
@@ -208,7 +211,15 @@ async def get_current_user(
         )
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    user = await _verify_clerk_token(token, db)
+    try:
+        user = await _verify_clerk_token(token, db)
+    except Exception as e:
+        logger.error(
+            f"{request.method} {request.url.path}: unexpected exception in _verify_clerk_token "
+            f"— {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        user = None
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     if not user.is_active:
@@ -243,7 +254,23 @@ async def get_optional_user(
             f"Authorization header {'present but not Bearer-scheme' if has_auth_header else 'missing entirely'}"
         )
         return None
-    return await _verify_clerk_token(token, db)
+    try:
+        user = await _verify_clerk_token(token, db)
+    except Exception as e:
+        # _verify_clerk_token catches its own expected failure modes and
+        # returns None; this is a defensive catch-all so an unexpected
+        # exception here surfaces in logs instead of propagating as an
+        # opaque 500, or - via FastAPI's dependency error handling -
+        # potentially masking as a 401 with no explanation.
+        logger.error(
+            f"{request.method} {request.url.path}: unexpected exception in _verify_clerk_token "
+            f"— {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        return None
+    if not user:
+        logger.warning(f"{request.method} {request.url.path}: _verify_clerk_token returned no user for this token")
+    return user
 
 
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:

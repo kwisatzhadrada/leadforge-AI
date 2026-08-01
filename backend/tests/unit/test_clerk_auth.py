@@ -62,11 +62,12 @@ def _make_token(
     private_key,
     clerk_id: str,
     exp_delta: int = 3600,
+    nbf_delta: int = 0,
     kid: str = KID,
     issuer: str = TEST_ISSUER,
 ) -> str:
     now = int(time.time())
-    claims = {"sub": clerk_id, "iss": issuer, "iat": now, "nbf": now, "exp": now + exp_delta}
+    claims = {"sub": clerk_id, "iss": issuer, "iat": now, "nbf": now + nbf_delta, "exp": now + exp_delta}
     return jwt.encode(claims, _pem(private_key), algorithm="RS256", headers={"kid": kid})
 
 
@@ -113,6 +114,56 @@ async def test_verify_clerk_token_rejects_expired_jwt(db_session, rsa_keypair, m
 
     expired_token = _make_token(private_key, clerk_id, exp_delta=-3600)
     result = await deps._verify_clerk_token(expired_token, db_session)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_verify_clerk_token_tolerates_small_clock_skew(db_session, rsa_keypair, monkeypatch):
+    """A token whose nbf is a few seconds in the future (this host's clock
+    running slightly behind Clerk's) must still be accepted within the
+    configured leeway — zero tolerance here is a classic source of
+    intermittent, hard-to-reproduce 401s on freshly-issued tokens."""
+    from app.api import deps
+
+    private_key, jwk = rsa_keypair
+    clerk_id = f"clerk_{uuid.uuid4().hex[:12]}"
+
+    user = User(clerk_id=clerk_id, email=f"{clerk_id}@example.com", plan_tier=PlanTier.free)
+    db_session.add(user)
+    await db_session.commit()
+
+    async def fake_fetch_jwks(force_refresh: bool = False):
+        return [jwk]
+
+    monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
+
+    token = _make_token(private_key, clerk_id, nbf_delta=15)  # within the 30s leeway
+    result = await deps._verify_clerk_token(token, db_session)
+
+    assert result is not None
+    assert result.clerk_id == clerk_id
+
+
+@pytest.mark.asyncio
+async def test_verify_clerk_token_rejects_clock_skew_beyond_leeway(db_session, rsa_keypair, monkeypatch):
+    """Confirms the leeway has a bound — this isn't a blanket bypass of nbf."""
+    from app.api import deps
+
+    private_key, jwk = rsa_keypair
+    clerk_id = f"clerk_{uuid.uuid4().hex[:12]}"
+
+    user = User(clerk_id=clerk_id, email=f"{clerk_id}@example.com", plan_tier=PlanTier.free)
+    db_session.add(user)
+    await db_session.commit()
+
+    async def fake_fetch_jwks(force_refresh: bool = False):
+        return [jwk]
+
+    monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
+
+    token = _make_token(private_key, clerk_id, nbf_delta=300)  # well beyond the 30s leeway
+    result = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 

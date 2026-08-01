@@ -75,6 +75,13 @@ async def create_generation(
 
     # Authenticated generation
     if not current_user:
+        auth_header = request.headers.get("Authorization", "")
+        logger.warning(
+            f"POST /generations/ rejected — get_optional_user resolved no user. "
+            f"Authorization header present={bool(auth_header)}, "
+            f"scheme={'Bearer' if auth_header.startswith('Bearer ') else auth_header.split(' ', 1)[0] if auth_header else 'none'}. "
+            f"See preceding app.api.deps log line(s) for the specific verification failure reason."
+        )
         raise HTTPException(status_code=401, detail="Authentication required")
 
     await check_generation_limit(current_user, db)
