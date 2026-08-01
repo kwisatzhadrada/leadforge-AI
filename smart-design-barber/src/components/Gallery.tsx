@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useReveal } from "../hooks/useReveal";
 import { SectionHead } from "./ui/SectionHead";
 import { Icon } from "./ui/Icon";
+import { Photo } from "./ui/Photo";
 import { galleryImages, pexelsUrl, type GalleryImage } from "../data/business";
 
 export function Gallery() {
@@ -57,12 +58,12 @@ export function Gallery() {
           <Icon name="close" className="h-[18px] w-[18px]" />
         </button>
         {active ? (
-          <img
-            src={pexelsUrl(active.photoId, 1400)}
-            alt={active.alt}
-            className="max-h-[80vh] max-w-[900px] rounded-[16px] border border-[var(--border)]"
+          <div
+            className="h-[70vh] w-[min(900px,90vw)] overflow-hidden rounded-[16px] border border-[var(--border)]"
             onClick={(e) => e.stopPropagation()}
-          />
+          >
+            <Photo src={pexelsUrl(active.photoId, 1400)} alt={active.alt} icon={active.icon} loading="eager" />
+          </div>
         ) : null}
       </div>
     </section>
@@ -79,11 +80,11 @@ function GalleryTile({ img, onOpen }: { img: GalleryImage; onOpen: () => void })
         img.tall ? "row-span-2" : ""
       }`}
     >
-      <img
+      <Photo
         src={pexelsUrl(img.photoId, 800)}
         alt={img.alt}
-        loading="lazy"
-        className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+        icon={img.icon}
+        className="transition-transform duration-500 group-hover:scale-105"
         style={{ filter: "grayscale(30%) contrast(1.08)" }}
       />
       <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_50%,rgba(0,0,0,0.75))] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />

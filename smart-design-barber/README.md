@@ -74,7 +74,11 @@ there, not in components.
   external images to visually verify them** (its network policy blocks
   outbound requests) — click through each `sourceUrl` before publishing to
   confirm they render and look right, and swap them for real shop/staff
-  photos whenever those exist.
+  photos whenever those exist. Every photo renders through
+  `src/components/ui/Photo.tsx`, which falls back to a styled placeholder
+  tile (icon + label) if an image ever fails to load, instead of a broken
+  image icon — this is real production behavior, not just a preview
+  workaround.
 - **Map**: `business.mapEmbedUrl` is a keyless Google Maps embed. For a
   pin-accurate result or analytics, swap in a Google Maps Embed API key.
 - **Social links**: footer Instagram/Facebook/TikTok icons point to `#` —
@@ -84,3 +88,18 @@ there, not in components.
 
 Static output from `npm run build` (`dist/`) — deploy to Netlify, Vercel,
 Cloudflare Pages, or any static host.
+
+## Generating a single-file preview
+
+`vite.config.singlefile.ts` is a preview-only build config that disables code
+splitting (`inlineDynamicImports`) so the whole app — including the lazily
+loaded 3D scene — lands in one JS file, for tools that need a single
+self-contained HTML file (e.g. an offline demo, or embedding as an artifact).
+It is **not** what gets deployed; `npm run build` / `vite.config.ts` is the
+real, properly code-split production build.
+
+```bash
+npx vite build --config vite.config.singlefile.ts
+# then inline dist-singlefile/assets/*.js and *.css (plus font url()
+# references in the CSS, as base64) into dist-singlefile/index.html
+```

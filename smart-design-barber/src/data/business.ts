@@ -147,11 +147,13 @@ export type GalleryImage = {
   photographer?: string;
   sourceUrl: string;
   tall?: boolean;
+  icon: string;
 };
 
 // Real photographs sourced from Pexels (free license). None are AI-generated.
 // Verify each via sourceUrl before publishing — this build environment
-// cannot load external images to visually confirm them itself.
+// cannot load external images to visually confirm them itself. `icon` is
+// only used as a same-brand placeholder if a photo fails to load.
 export const galleryImages: GalleryImage[] = [
   {
     tag: "Detail Work",
@@ -160,6 +162,7 @@ export const galleryImages: GalleryImage[] = [
     photographer: "Engin Akyurt",
     sourceUrl: "https://www.pexels.com/photo/person-using-hair-razor-on-man-s-hair-3356174/",
     tall: true,
+    icon: "razor",
   },
   {
     tag: "Beard Trim",
@@ -167,6 +170,7 @@ export const galleryImages: GalleryImage[] = [
     photoId: "3998417",
     photographer: "cottonbro studio",
     sourceUrl: "https://www.pexels.com/photo/man-getting-a-beard-cut-3998417/",
+    icon: "beard",
   },
   {
     tag: "Kids' Haircut",
@@ -174,6 +178,7 @@ export const galleryImages: GalleryImage[] = [
     photoId: "7697360",
     photographer: "RDNE Stock project",
     sourceUrl: "https://www.pexels.com/photo/boy-getting-a-haircut-7697360/",
+    icon: "kid",
   },
   {
     tag: "Tools of the Trade",
@@ -182,6 +187,7 @@ export const galleryImages: GalleryImage[] = [
     photographer: "Hook Tell",
     sourceUrl:
       "https://www.pexels.com/photo/cash-registers-among-clipper-and-hairdressing-tools-4449799/",
+    icon: "tools",
   },
   {
     tag: "Hot Towel Shave",
@@ -190,12 +196,14 @@ export const galleryImages: GalleryImage[] = [
     photographer: "alexandre saraiva carniato",
     sourceUrl: "https://www.pexels.com/photo/a-person-shaving-a-man-s-beard-6007400/",
     tall: true,
+    icon: "shave",
   },
   {
     tag: "Turkish Tea Ritual",
     alt: "Traditional Turkish tea served in a tulip glass",
     photoId: "28572821",
     sourceUrl: "https://www.pexels.com/photo/traditional-turkish-tea-in-a-tulip-glass-28572821/",
+    icon: "tea",
   },
 ];
 

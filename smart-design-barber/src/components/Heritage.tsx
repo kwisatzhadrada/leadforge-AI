@@ -1,5 +1,6 @@
 import { useReveal } from "../hooks/useReveal";
 import { Icon } from "./ui/Icon";
+import { Photo } from "./ui/Photo";
 import { aboutImage, business, pexelsUrl } from "../data/business";
 
 const POINTS = [
@@ -17,11 +18,10 @@ export function Heritage() {
       <div className="wrap grid gap-12 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
         <div ref={mediaRef}>
           <div className="relative overflow-hidden rounded-[22px] border border-[var(--border)] aspect-[4/5]">
-            <img
+            <Photo
               src={pexelsUrl(aboutImage.photoId, 1200)}
               alt={aboutImage.alt}
-              loading="lazy"
-              className="h-full w-full object-cover"
+              icon="photo"
               style={{ filter: "grayscale(20%) contrast(1.08)" }}
             />
             <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_55%,rgba(11,10,9,0.75))]" />

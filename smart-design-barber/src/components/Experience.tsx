@@ -1,4 +1,5 @@
 import { useReveal } from "../hooks/useReveal";
+import { Photo } from "./ui/Photo";
 import { experienceItems, experienceImage, pexelsUrl } from "../data/business";
 
 export function Experience() {
@@ -27,11 +28,10 @@ export function Experience() {
         </div>
 
         <div ref={mediaRef} className="relative overflow-hidden rounded-[22px] border border-[var(--border)] aspect-[5/4]">
-          <img
+          <Photo
             src={pexelsUrl(experienceImage.photoId, 1200)}
             alt={experienceImage.alt}
-            loading="lazy"
-            className="h-full w-full object-cover"
+            icon="tea"
             style={{ filter: "grayscale(15%) contrast(1.06)" }}
           />
         </div>

@@ -101,6 +101,18 @@ const paths: Record<string, ReactElement> = {
       <path d="M7 14h6l4 8h-3l-3-6-3 6H5z" />
     </>
   ),
+  beard: (
+    <>
+      <path d="M6 4v6c0 6 3 10 6 10s6-4 6-10V4" />
+      <path d="M9 4v5M15 4v5" />
+    </>
+  ),
+  photo: (
+    <>
+      <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+      <circle cx="12" cy="13.5" r="3.5" />
+    </>
+  ),
 };
 
 export function Icon({
