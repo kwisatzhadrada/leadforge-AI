@@ -74,20 +74,20 @@ async def _fetch_jwks(force_refresh: bool = False) -> list[dict]:
     return keys
 
 
-async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
+async def _verify_clerk_token(token: str, db: AsyncSession) -> tuple[Optional[User], Optional[str]]:
     """Verify a Clerk session JWT locally against Clerk's JWKS, and resolve
     it to our own User row. Caches the resolved clerk_id in Redis for 5
-    minutes so we don't redo signature verification on every request."""
+    minutes so we don't redo signature verification on every request.
+
+    Returns (user, None) on success, or (None, reason) on failure, where
+    reason is a short, secret-free, human-readable string safe to surface
+    directly in an API error response — added because getting the actual
+    failure detail out of Railway's logs proved unreliable across several
+    rounds of debugging a production incident; putting it in the response
+    body means it shows up in the browser's Network tab with no extra steps.
+    """
     cache_key = _token_cache_key(token)
     preview = _token_preview(token)
-
-    # TEMP DEBUG: raw print()s alongside the normal logger calls below, to
-    # rule out a logging-framework/propagation issue (module-level filtering,
-    # multi-worker stdout capture, log-platform filtering by logger name)
-    # as the reason app.api.deps lines weren't appearing in Railway despite
-    # app.api.v1.generations lines from the same request appearing fine.
-    # Remove once the missing-logs mystery is resolved.
-    print(f"[CLERK_DEBUG] _verify_clerk_token ENTER token={preview}", flush=True)
 
     cached = await cache_get(cache_key)
     if cached:
@@ -98,34 +98,31 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
                 result = await db.execute(select(User).where(User.clerk_id == clerk_id))
                 user = result.scalar_one_or_none()
                 if not user:
-                    logger.warning(
-                        f"Token {preview}: cached clerk_id={clerk_id} verified but no matching "
-                        f"User row exists (Clerk webhook may not have provisioned this user yet)"
-                    )
-                print(f"[CLERK_DEBUG] {preview}: cache hit, clerk_id={clerk_id}, user_found={bool(user)}", flush=True)
-                return user
+                    reason = f"cached clerk_id={clerk_id} but no matching User row (Clerk webhook may not have provisioned this user yet)"
+                    logger.warning(f"Token {preview}: {reason}")
+                    return None, reason
+                return user, None
         except Exception as e:
             logger.error(f"Token {preview}: error reading cached verification result — {type(e).__name__}: {e}")
-            print(f"[CLERK_DEBUG] {preview}: cache-read exception {type(e).__name__}: {e}", flush=True)
             # fall through to full verification below
 
     try:
         unverified_header = jwt.get_unverified_header(token)
     except JOSEError as e:
-        logger.warning(f"Token {preview}: malformed JWT header — {e}")
-        print(f"[CLERK_DEBUG] {preview}: malformed header {type(e).__name__}: {e}", flush=True)
-        return None
+        reason = f"malformed JWT header: {e}"
+        logger.warning(f"Token {preview}: {reason}")
+        return None, reason
 
     kid = unverified_header.get("kid")
-    print(f"[CLERK_DEBUG] {preview}: header kid={kid} alg={unverified_header.get('alg')}", flush=True)
     if not kid:
-        logger.warning(f"Token {preview}: JWT header missing 'kid'")
-        return None
+        reason = "JWT header missing 'kid'"
+        logger.warning(f"Token {preview}: {reason}")
+        return None, reason
 
     if not settings.CLERK_ISSUER:
-        logger.error(f"Token {preview}: CLERK_ISSUER is not configured — cannot verify any token")
-        print(f"[CLERK_DEBUG] {preview}: CLERK_ISSUER not configured", flush=True)
-        return None
+        reason = "CLERK_ISSUER is not configured on the backend"
+        logger.error(f"Token {preview}: {reason}")
+        return None, reason
 
     try:
         keys = await _fetch_jwks()
@@ -135,26 +132,21 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             keys = await _fetch_jwks(force_refresh=True)
             matching_key = next((k for k in keys if k.get("kid") == kid), None)
         if not matching_key:
-            logger.warning(f"Token {preview}: no JWKS key found for kid={kid}")
-            print(f"[CLERK_DEBUG] {preview}: no JWKS key for kid={kid}; fetched kids={[k.get('kid') for k in keys]}", flush=True)
-            return None
+            reason = f"no JWKS key found for kid={kid} (fetched kids={[k.get('kid') for k in keys]}) from {settings.CLERK_ISSUER}/.well-known/jwks.json"
+            logger.warning(f"Token {preview}: {reason}")
+            return None, reason
     except httpx.HTTPStatusError as e:
-        logger.error(
-            f"Token {preview}: fetching Clerk JWKS failed — "
-            f"{e.response.status_code} {e.response.text[:300]}"
-        )
-        print(f"[CLERK_DEBUG] {preview}: JWKS fetch HTTP error {e.response.status_code}: {e.response.text[:300]}", flush=True)
-        return None
+        reason = f"fetching Clerk JWKS from {settings.CLERK_ISSUER}/.well-known/jwks.json failed: HTTP {e.response.status_code} {e.response.text[:200]}"
+        logger.error(f"Token {preview}: {reason}")
+        return None, reason
     except httpx.TimeoutException:
-        logger.error(f"Token {preview}: fetching Clerk JWKS timed out")
-        print(f"[CLERK_DEBUG] {preview}: JWKS fetch timed out", flush=True)
-        return None
+        reason = f"fetching Clerk JWKS from {settings.CLERK_ISSUER}/.well-known/jwks.json timed out"
+        logger.error(f"Token {preview}: {reason}")
+        return None, reason
     except Exception as e:
-        logger.error(f"Token {preview}: fetching Clerk JWKS errored — {type(e).__name__}: {e}")
-        print(f"[CLERK_DEBUG] {preview}: JWKS fetch exception {type(e).__name__}: {e}", flush=True)
-        return None
-
-    print(f"[CLERK_DEBUG] {preview}: JWKS key found for kid={kid}, attempting jwt.decode", flush=True)
+        reason = f"fetching Clerk JWKS errored: {type(e).__name__}: {e}"
+        logger.error(f"Token {preview}: {reason}")
+        return None, reason
 
     try:
         claims = jwt.decode(
@@ -168,33 +160,30 @@ async def _verify_clerk_token(token: str, db: AsyncSession) -> Optional[User]:
             },
         )
     except JOSEError as e:
-        logger.warning(f"Token {preview}: signature/claims verification failed — {type(e).__name__}: {e}")
-        print(f"[CLERK_DEBUG] {preview}: jwt.decode failed — {type(e).__name__}: {e}", flush=True)
-        return None
+        reason = f"signature/claims verification failed: {type(e).__name__}: {e}"
+        logger.warning(f"Token {preview}: {reason}")
+        return None, reason
     except Exception as e:
-        logger.error(f"Token {preview}: unexpected exception in jwt.decode — {type(e).__name__}: {e}", exc_info=True)
-        print(f"[CLERK_DEBUG] {preview}: jwt.decode UNEXPECTED exception {type(e).__name__}: {e}", flush=True)
-        return None
+        reason = f"unexpected exception in jwt.decode: {type(e).__name__}: {e}"
+        logger.error(f"Token {preview}: {reason}", exc_info=True)
+        return None, reason
 
     clerk_id = claims.get("sub")
-    print(f"[CLERK_DEBUG] {preview}: jwt.decode OK, sub={clerk_id}, iss={claims.get('iss')}", flush=True)
     if not clerk_id:
-        logger.warning(f"Token {preview}: verified JWT has no 'sub' claim")
-        return None
+        reason = "verified JWT has no 'sub' claim"
+        logger.warning(f"Token {preview}: {reason}")
+        return None, reason
 
     await cache_set(cache_key, json.dumps({"clerk_id": clerk_id}), ttl=_CLERK_TOKEN_TTL)
 
     result = await db.execute(select(User).where(User.clerk_id == clerk_id))
     user = result.scalar_one_or_none()
     if not user:
-        logger.warning(
-            f"Token {preview}: JWT verified OK for clerk_id={clerk_id} but no matching User row "
-            f"exists — check the Clerk webhook (user.created) actually fired and was accepted"
-        )
-    else:
-        logger.info(f"Token {preview}: verified — clerk_id={clerk_id} user_id={user.id}")
-    print(f"[CLERK_DEBUG] {preview}: DB lookup for clerk_id={clerk_id} -> user_found={bool(user)}", flush=True)
-    return user
+        reason = f"JWT verified OK for clerk_id={clerk_id} but no matching User row exists — check the Clerk webhook (user.created) actually fired and was accepted"
+        logger.warning(f"Token {preview}: {reason}")
+        return None, reason
+    logger.info(f"Token {preview}: verified — clerk_id={clerk_id} user_id={user.id}")
+    return user, None
 
 
 def _extract_bearer(request: Request) -> Optional[str]:
@@ -234,8 +223,6 @@ async def get_current_user(
     # this function. Narrowed to require an explicit "development" so a
     # misconfigured APP_ENV fails closed (falls through to real Clerk
     # verification, which logs and 401s properly) instead of failing open.
-    print(f"[CLERK_DEBUG] get_current_user: APP_ENV={settings.APP_ENV!r} is_development={settings.is_development} "
-          f"CLERK_SECRET_KEY_set={bool(settings.CLERK_SECRET_KEY)}", flush=True)
     if not settings.CLERK_SECRET_KEY and settings.is_development:
         dev_id = request.headers.get("X-Dev-User-Id", "dev-founder-001")
         return await _dev_user(dev_id, db)
@@ -250,16 +237,20 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
-        user = await _verify_clerk_token(token, db)
+        user, reason = await _verify_clerk_token(token, db)
     except Exception as e:
         logger.error(
             f"{request.method} {request.url.path}: unexpected exception in _verify_clerk_token "
             f"— {type(e).__name__}: {e}",
             exc_info=True,
         )
-        user = None
+        user, reason = None, f"unexpected exception: {type(e).__name__}: {e}"
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        # TEMP DEBUG: include the specific verification failure reason in the
+        # response itself — added after several rounds of Railway server
+        # logs proving unreliable to retrieve during a live incident.
+        # Remove the reason field (or lower its detail) once resolved.
+        raise HTTPException(status_code=401, detail=f"Invalid or expired token: {reason}")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account suspended")
 
@@ -276,48 +267,45 @@ async def get_current_user(
 async def get_optional_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> Optional[User]:
-    """Returns authenticated user or None — for demo endpoints."""
-    # See get_current_user for why this is gated on settings.is_development
-    # rather than `not settings.is_production` — narrowed for the same
-    # fail-closed reason. This branch previously returned None silently
-    # here (no X-Dev-User-Id header, which the frontend never sends) with
-    # zero logging, since it's the first thing in the function.
-    print(f"[CLERK_DEBUG] get_optional_user: APP_ENV={settings.APP_ENV!r} is_development={settings.is_development} "
-          f"CLERK_SECRET_KEY_set={bool(settings.CLERK_SECRET_KEY)}", flush=True)
+) -> tuple[Optional[User], Optional[str]]:
+    """Returns (user, None) if authenticated, or (None, reason) otherwise —
+    for demo endpoints where auth is optional but callers that do require
+    it (e.g. POST /generations/) need the specific failure reason to
+    surface in their own error response. See get_current_user for why the
+    dev bypass is gated on settings.is_development rather than
+    `not settings.is_production`."""
     if not settings.CLERK_SECRET_KEY and settings.is_development:
         dev_id = request.headers.get("X-Dev-User-Id")
         if dev_id:
-            return await _dev_user(dev_id, db)
-        return None
+            return await _dev_user(dev_id, db), None
+        return None, "no X-Dev-User-Id header (dev mode, no token sent)"
 
     token = _extract_bearer(request)
     if not token:
         has_auth_header = "Authorization" in request.headers
-        logger.warning(
-            f"{request.method} {request.url.path}: no bearer token — "
-            f"Authorization header {'present but not Bearer-scheme' if has_auth_header else 'missing entirely'}"
+        reason = (
+            "Authorization header present but not Bearer-scheme"
+            if has_auth_header else "Authorization header missing entirely"
         )
-        return None
-    print(f"[CLERK_DEBUG] get_optional_user: about to call _verify_clerk_token, token={_token_preview(token)}", flush=True)
+        logger.warning(f"{request.method} {request.url.path}: no bearer token — {reason}")
+        return None, reason
+
     try:
-        user = await _verify_clerk_token(token, db)
+        user, reason = await _verify_clerk_token(token, db)
     except Exception as e:
         # _verify_clerk_token catches its own expected failure modes and
-        # returns None; this is a defensive catch-all so an unexpected
-        # exception here surfaces in logs instead of propagating as an
-        # opaque 500, or - via FastAPI's dependency error handling -
-        # potentially masking as a 401 with no explanation.
-        print(f"[CLERK_DEBUG] get_optional_user: _verify_clerk_token RAISED {type(e).__name__}: {e}", flush=True)
+        # returns (None, reason); this is a defensive catch-all so an
+        # unexpected exception here surfaces in logs instead of propagating
+        # as an opaque 500.
         logger.error(
             f"{request.method} {request.url.path}: unexpected exception in _verify_clerk_token "
             f"— {type(e).__name__}: {e}",
             exc_info=True,
         )
-        return None
+        return None, f"unexpected exception: {type(e).__name__}: {e}"
     if not user:
-        logger.warning(f"{request.method} {request.url.path}: _verify_clerk_token returned no user for this token")
-    return user
+        logger.warning(f"{request.method} {request.url.path}: _verify_clerk_token returned no user for this token — {reason}")
+    return user, reason
 
 
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:

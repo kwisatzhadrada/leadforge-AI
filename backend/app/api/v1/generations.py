@@ -40,8 +40,9 @@ async def create_generation(
     payload: GenerationCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_user),
+    auth_result: tuple[Optional[User], Optional[str]] = Depends(get_optional_user),
 ):
+    current_user, auth_fail_reason = auth_result
     ip = request.client.host if request.client else "unknown"
 
     if payload.is_demo:
@@ -75,14 +76,12 @@ async def create_generation(
 
     # Authenticated generation
     if not current_user:
-        auth_header = request.headers.get("Authorization", "")
-        logger.warning(
-            f"POST /generations/ rejected — get_optional_user resolved no user. "
-            f"Authorization header present={bool(auth_header)}, "
-            f"scheme={'Bearer' if auth_header.startswith('Bearer ') else auth_header.split(' ', 1)[0] if auth_header else 'none'}. "
-            f"See preceding app.api.deps log line(s) for the specific verification failure reason."
-        )
-        raise HTTPException(status_code=401, detail="Authentication required")
+        logger.warning(f"POST /generations/ rejected — {auth_fail_reason}")
+        # TEMP DEBUG: the reason is included directly in the response body
+        # (visible in the browser's Network tab) rather than only in server
+        # logs, which proved unreliable to retrieve during this incident.
+        # Revert to a plain "Authentication required" once resolved.
+        raise HTTPException(status_code=401, detail=f"Authentication required: {auth_fail_reason}")
 
     await check_generation_limit(current_user, db)
 

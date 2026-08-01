@@ -92,7 +92,7 @@ async def client(db_session, mock_user):
         return mock_user
 
     async def override_optional_user():
-        return mock_user
+        return mock_user, None
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = override_user
@@ -110,7 +110,7 @@ async def anon_client(db_session):
         yield db_session
 
     async def override_optional_user():
-        return None
+        return None, "anon_client: no auth configured for this test"
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_optional_user] = override_optional_user

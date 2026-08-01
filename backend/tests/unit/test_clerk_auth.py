@@ -107,7 +107,7 @@ async def test_verify_clerk_token_accepts_valid_signed_jwt(db_session, rsa_keypa
     deps._jwks_cache["fetched_at"] = 0.0
 
     token = _make_token(private_key, clerk_id)
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is not None
     assert result.clerk_id == clerk_id
@@ -130,7 +130,7 @@ async def test_verify_clerk_token_rejects_expired_jwt(db_session, rsa_keypair, m
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     expired_token = _make_token(private_key, clerk_id, exp_delta=-3600)
-    result = await deps._verify_clerk_token(expired_token, db_session)
+    result, _reason = await deps._verify_clerk_token(expired_token, db_session)
 
     assert result is None
 
@@ -156,7 +156,7 @@ async def test_verify_clerk_token_tolerates_small_clock_skew(db_session, rsa_key
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     token = _make_token(private_key, clerk_id, nbf_delta=15)  # within the 30s leeway
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is not None
     assert result.clerk_id == clerk_id
@@ -180,7 +180,7 @@ async def test_verify_clerk_token_rejects_clock_skew_beyond_leeway(db_session, r
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     token = _make_token(private_key, clerk_id, nbf_delta=300)  # well beyond the 30s leeway
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 
@@ -204,7 +204,7 @@ async def test_verify_clerk_token_rejects_wrong_signature(db_session, rsa_keypai
 
     # signed with a *different* private key than the one whose public JWK we serve
     forged_token = _make_token(other_private_key, clerk_id)
-    result = await deps._verify_clerk_token(forged_token, db_session)
+    result, _reason = await deps._verify_clerk_token(forged_token, db_session)
 
     assert result is None
 
@@ -229,7 +229,7 @@ async def test_verify_clerk_token_rejects_wrong_issuer(db_session, rsa_keypair, 
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     token = _make_token(private_key, clerk_id, issuer="https://some-other-instance.clerk.accounts.dev")
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 
@@ -249,7 +249,7 @@ async def test_verify_clerk_token_valid_jwt_no_matching_user_returns_none(db_ses
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     token = _make_token(private_key, clerk_id)
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 
@@ -271,7 +271,7 @@ async def test_verify_clerk_token_rejects_unknown_kid(db_session, rsa_keypair, m
     monkeypatch.setattr(deps, "_fetch_jwks", fake_fetch_jwks)
 
     token = _make_token(private_key, clerk_id, kid="some-other-kid")
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 
@@ -291,7 +291,7 @@ async def test_verify_clerk_token_fails_closed_when_issuer_not_configured(db_ses
     await db_session.commit()
 
     token = _make_token(private_key, clerk_id)
-    result = await deps._verify_clerk_token(token, db_session)
+    result, _reason = await deps._verify_clerk_token(token, db_session)
 
     assert result is None
 
@@ -315,7 +315,7 @@ async def test_get_optional_user_bypass_does_not_trigger_in_production(db_sessio
     monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")  # misconfigured/missing
 
     request = _fake_request({"Authorization": "Bearer some-token"})
-    result = await deps.get_optional_user(request, db_session)
+    result, _reason = await deps.get_optional_user(request, db_session)
 
     # Must fall through to real verification (and fail, since "some-token"
     # isn't a real JWT) rather than silently returning None via the bypass
@@ -334,7 +334,7 @@ async def test_get_optional_user_bypass_does_not_trigger_when_app_env_unset_or_m
         monkeypatch.setattr(deps.settings, "CLERK_SECRET_KEY", "")
 
         request = _fake_request({})  # no Authorization header at all
-        result = await deps.get_optional_user(request, db_session)
+        result, _reason = await deps.get_optional_user(request, db_session)
 
         # Old behavior: silently returns None via the bypass (no log, no real
         # check performed). New behavior: still returns None here (no token),
