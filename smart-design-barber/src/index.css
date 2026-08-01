@@ -1,0 +1,209 @@
+@import "tailwindcss";
+
+/* Register our fonts as real Tailwind theme tokens so `font-sans` /
+   `font-mono` / `font-display` utilities actually use them, instead of
+   Tailwind's built-in generic stacks. */
+@theme {
+  --font-sans: "Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Gloock", "Iowan Old Style", serif;
+}
+
+/* ---------- FONTS (self-hosted, no external requests) ---------- */
+@font-face {
+  font-family: "Gloock";
+  font-weight: 400;
+  src: url("/fonts/Gloock-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-weight: 400;
+  src: url("/fonts/GeistMono-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-weight: 700;
+  src: url("/fonts/GeistMono-Bold.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-weight: 400;
+  src: url("/fonts/InstrumentSans-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-weight: 700;
+  src: url("/fonts/InstrumentSans-Bold.ttf") format("truetype");
+  font-display: swap;
+}
+
+:root {
+  /* Obsidian + brass/copper + cold precision steel */
+  --bg: #0b0a09;
+  --bg-elevated: #121010;
+  --surface: #18150f;
+  --surface-2: #211c14;
+  --border: #332b1e;
+  --border-soft: #241f17;
+
+  --text: #f2ece0;
+  --text-dim: #b3a996;
+  --text-faint: #78705f;
+
+  --brass: #c9974a;
+  --brass-bright: #e2b568;
+  --brass-dark: #8f6527;
+  --brass-glow: rgba(201, 151, 74, 0.32);
+
+  --steel: #bfe9ff;
+  --steel-dim: #6f9db3;
+
+  --font-display: "Gloock", "Iowan Old Style", serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-body: "Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius-sm: 4px;
+  --radius-md: 10px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --container: 1240px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+::selection {
+  background: var(--brass);
+  color: #150f06;
+}
+
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--steel);
+  outline-offset: 3px;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 400;
+  line-height: 1.02;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+/* Gloock (the display serif) is reserved for the big headline moments —
+   H1/H2 — so it never gets forced onto small utility labels like "Phone"
+   or "Hours", where a display serif hurts legibility. H3/H4 default to
+   the body face; components opt into Gloock explicitly where wanted. */
+h1,
+h2 {
+  font-family: var(--font-display);
+}
+
+h3,
+h4 {
+  font-family: var(--font-body);
+  font-weight: 700;
+}
+
+.wrap {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
+.kicker {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  color: var(--brass);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.kicker::before {
+  content: "";
+  width: 22px;
+  height: 1px;
+  background: var(--brass);
+  display: inline-block;
+}
+
+.brass-text {
+  background: linear-gradient(120deg, var(--brass-bright) 0%, var(--brass) 50%, var(--brass-dark) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(26px);
+  transition:
+    opacity 0.9s var(--ease),
+    transform 0.9s var(--ease);
+}
+
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
